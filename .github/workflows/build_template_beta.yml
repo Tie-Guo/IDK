@@ -74,9 +74,10 @@ jobs:
           yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.1.13356709" >> $GITHUB_ENV
 
-      - name: Get latest prerelease tag from godot-builds
-        id: get_tag
+      - name: Get latest prerelease tag and commit hash from godot-builds
+        id: get_commit
         run: |
+          # 获取最新的预发布标签
           LATEST_PRE_TAG=$(curl -s https://api.github.com/repos/godotengine/godot-builds/releases \
             | jq -r '.[] | select(.prerelease == true) | .tag_name' \
             | head -n1)
@@ -87,26 +88,32 @@ jobs:
           echo "Latest prerelease tag: $LATEST_PRE_TAG"
           echo "LATEST_PRE_TAG=$LATEST_PRE_TAG" >> $GITHUB_ENV
 
-      - name: Download source zip from godot-builds release
+          # 获取该 release 的 body，提取 "Built from commit <hash>"
+          BODY=$(curl -s https://api.github.com/repos/godotengine/godot-builds/releases/tags/$LATEST_PRE_TAG \
+            | jq -r '.body')
+          # 用正则提取 40 位十六进制 hash（grep -oP 使用 Perl 正则）
+          COMMIT_SHA=$(echo "$BODY" | grep -oP 'Built from commit \K[0-9a-f]{40}' | head -n1)
+          if [ -z "$COMMIT_SHA" ]; then
+            echo "ERROR: Could not find commit hash in release body."
+            exit 1
+          fi
+          echo "Commit SHA: $COMMIT_SHA"
+          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+
+      - name: Clone Godot source at that commit
         run: |
-          LATEST_PRE_TAG="${{ env.LATEST_PRE_TAG }}"
-          ZIP_URL="https://github.com/godotengine/godot-builds/archive/refs/tags/${LATEST_PRE_TAG}.zip"
-          echo "Downloading $ZIP_URL"
-          wget -q "$ZIP_URL" -O source.zip
-          unzip -q source.zip -d source
-          # 解压后的目录名通常为 godot-builds-<tag>，将其重命名为 godot
-          EXTRACTED_DIR=$(find source -mindepth 1 -maxdepth 1 -type d)
-          if [ -z "$EXTRACTED_DIR" ]; then
-            echo "ERROR: No extracted directory found."
+          # 浅克隆官方仓库
+          git clone --depth 1 https://github.com/godotengine/godot.git godot
+          cd godot
+          # 拉取指定 commit（浅克隆可以 fetch 单个 commit）
+          git fetch --depth 1 origin $COMMIT_SHA
+          # 检出该 commit
+          git checkout $COMMIT_SHA
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Failed to checkout commit $COMMIT_SHA"
             exit 1
           fi
-          mv "$EXTRACTED_DIR" godot
-          ls -la godot/
-          # 验证是否包含 SConstruct
-          if [ ! -f godot/SConstruct ]; then
-            echo "ERROR: SConstruct not found in extracted source."
-            exit 1
-          fi
+          echo "Checked out commit $COMMIT_SHA"
 
       - name: Install Swappy libraries
         run: |
