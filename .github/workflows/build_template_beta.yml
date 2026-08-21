@@ -74,10 +74,9 @@ jobs:
           yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.1.13356709" >> $GITHUB_ENV
 
-      - name: Get latest prerelease tag and commit SHA from godot-builds
-        id: get_commit
+      - name: Get latest prerelease tag from godot-builds
+        id: get_tag
         run: |
-          # 获取最新的预发布标签
           LATEST_PRE_TAG=$(curl -s https://api.github.com/repos/godotengine/godot-builds/releases \
             | jq -r '.[] | select(.prerelease == true) | .tag_name' \
             | head -n1)
@@ -88,39 +87,26 @@ jobs:
           echo "Latest prerelease tag: $LATEST_PRE_TAG"
           echo "LATEST_PRE_TAG=$LATEST_PRE_TAG" >> $GITHUB_ENV
 
-          # 获取该 tag 对应的 commit SHA（解引用 annotated tag）
-          REF_URL="https://api.github.com/repos/godotengine/godot-builds/git/refs/tags/$LATEST_PRE_TAG"
-          RESP=$(curl -s $REF_URL)
-          OBJECT_SHA=$(echo $RESP | jq -r '.object.sha')
-          OBJECT_TYPE=$(echo $RESP | jq -r '.object.type')
-
-          if [ "$OBJECT_TYPE" = "tag" ]; then
-            # 如果是 annotated tag，需要再获取 tag 对象指向的 commit
-            TAG_URL="https://api.github.com/repos/godotengine/godot-builds/git/tags/$OBJECT_SHA"
-            COMMIT_SHA=$(curl -s $TAG_URL | jq -r '.object.sha')
-          else
-            COMMIT_SHA=$OBJECT_SHA
-          fi
-
-          if [ -z "$COMMIT_SHA" ] || [ "$COMMIT_SHA" = "null" ]; then
-            echo "ERROR: Failed to get commit SHA for tag $LATEST_PRE_TAG"
-            exit 1
-          fi
-
-          echo "Commit SHA: $COMMIT_SHA"
-          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
-
-      - name: Clone Godot source at that commit
+      - name: Download source zip from godot-builds release
         run: |
-          git clone --depth 1 https://github.com/godotengine/godot.git godot
-          cd godot
-          git fetch --depth 1 origin $COMMIT_SHA
-          git checkout $COMMIT_SHA
-          if [ $? -ne 0 ]; then
-            echo "ERROR: Failed to checkout commit $COMMIT_SHA"
+          LATEST_PRE_TAG="${{ env.LATEST_PRE_TAG }}"
+          ZIP_URL="https://github.com/godotengine/godot-builds/archive/refs/tags/${LATEST_PRE_TAG}.zip"
+          echo "Downloading $ZIP_URL"
+          wget -q "$ZIP_URL" -O source.zip
+          unzip -q source.zip -d source
+          # 解压后的目录名通常为 godot-builds-<tag>，将其重命名为 godot
+          EXTRACTED_DIR=$(find source -mindepth 1 -maxdepth 1 -type d)
+          if [ -z "$EXTRACTED_DIR" ]; then
+            echo "ERROR: No extracted directory found."
             exit 1
           fi
-          echo "Checked out commit $COMMIT_SHA"
+          mv "$EXTRACTED_DIR" godot
+          ls -la godot/
+          # 验证是否包含 SConstruct
+          if [ ! -f godot/SConstruct ]; then
+            echo "ERROR: SConstruct not found in extracted source."
+            exit 1
+          fi
 
       - name: Install Swappy libraries
         run: |
