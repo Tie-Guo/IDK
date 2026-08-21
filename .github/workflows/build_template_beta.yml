@@ -76,11 +76,22 @@ jobs:
 
       - name: Get latest prerelease tag and commit hash from godot-builds
         id: get_commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 获取最新的预发布标签
-          LATEST_PRE_TAG=$(curl -s https://api.github.com/repos/godotengine/godot-builds/releases \
-            | jq -r '.[] | select(.prerelease == true) | .tag_name' \
-            | head -n1)
+          # 使用 token 认证，避免速率限制和错误响应
+          API_URL="https://api.github.com/repos/godotengine/godot-builds/releases"
+          RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" $API_URL)
+          
+          # 检查是否为有效 JSON（若失败，打印响应内容辅助调试）
+          if ! echo "$RESPONSE" | jq empty 2>/dev/null; then
+            echo "ERROR: Invalid JSON response from GitHub API."
+            echo "Response was:"
+            echo "$RESPONSE" | head -20
+            exit 1
+          fi
+
+          LATEST_PRE_TAG=$(echo "$RESPONSE" | jq -r '.[] | select(.prerelease == true) | .tag_name' | head -n1)
           if [ -z "$LATEST_PRE_TAG" ]; then
             echo "ERROR: No prerelease found in godot-builds."
             exit 1
@@ -89,12 +100,14 @@ jobs:
           echo "LATEST_PRE_TAG=$LATEST_PRE_TAG" >> $GITHUB_ENV
 
           # 获取该 release 的 body，提取 "Built from commit <hash>"
-          BODY=$(curl -s https://api.github.com/repos/godotengine/godot-builds/releases/tags/$LATEST_PRE_TAG \
-            | jq -r '.body')
-          # 用正则提取 40 位十六进制 hash（grep -oP 使用 Perl 正则）
+          RELEASE_URL="https://api.github.com/repos/godotengine/godot-builds/releases/tags/$LATEST_PRE_TAG"
+          BODY_RESP=$(curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" $RELEASE_URL)
+          BODY=$(echo "$BODY_RESP" | jq -r '.body')
           COMMIT_SHA=$(echo "$BODY" | grep -oP 'Built from commit \K[0-9a-f]{40}' | head -n1)
           if [ -z "$COMMIT_SHA" ]; then
             echo "ERROR: Could not find commit hash in release body."
+            echo "Body was:"
+            echo "$BODY"
             exit 1
           fi
           echo "Commit SHA: $COMMIT_SHA"
@@ -102,12 +115,9 @@ jobs:
 
       - name: Clone Godot source at that commit
         run: |
-          # 浅克隆官方仓库
           git clone --depth 1 https://github.com/godotengine/godot.git godot
           cd godot
-          # 拉取指定 commit（浅克隆可以 fetch 单个 commit）
           git fetch --depth 1 origin $COMMIT_SHA
-          # 检出该 commit
           git checkout $COMMIT_SHA
           if [ $? -ne 0 ]; then
             echo "ERROR: Failed to checkout commit $COMMIT_SHA"
@@ -136,7 +146,6 @@ jobs:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: |
-          # 从标签中提取版本状态（例如 4.8-dev3 → dev3）
           STATUS=$(echo "$LATEST_PRE_TAG" | cut -d '-' -f2)
           if [ -n "$STATUS" ]; then
             export GODOT_VERSION_STATUS="$STATUS"
