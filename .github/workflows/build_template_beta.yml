@@ -74,41 +74,31 @@ jobs:
           yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.1.13356709" >> $GITHUB_ENV
 
-      - name: Clone latest prerelease from godot-builds
+      - name: Get latest prerelease tag from godot-builds
+        id: get_tag
         run: |
-          # 获取 godot-builds 中最新预发布版本的标签
           LATEST_PRE_TAG=$(curl -s https://api.github.com/repos/godotengine/godot-builds/releases \
             | jq -r '.[] | select(.prerelease == true) | .tag_name' \
             | head -n1)
-
           if [ -z "$LATEST_PRE_TAG" ]; then
             echo "ERROR: No prerelease found in godot-builds."
             exit 1
           fi
-
           echo "Latest prerelease tag: $LATEST_PRE_TAG"
           echo "LATEST_PRE_TAG=$LATEST_PRE_TAG" >> $GITHUB_ENV
 
-          # 获取该标签对应的提交 SHA
-          COMMIT_SHA=$(curl -s https://api.github.com/repos/godotengine/godot-builds/git/ref/tags/$LATEST_PRE_TAG \
-            | jq -r '.object.sha')
-
-          if [ -z "$COMMIT_SHA" ] || [ "$COMMIT_SHA" = "null" ]; then
-            echo "ERROR: Failed to get commit SHA for tag $LATEST_PRE_TAG"
+      - name: Clone Godot source at that tag
+        run: |
+          git clone --depth 1 --branch "$LATEST_PRE_TAG" https://github.com/godotengine/godot.git godot
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Failed to clone tag $LATEST_PRE_TAG from godot repository."
             exit 1
           fi
-
-          echo "Commit SHA: $COMMIT_SHA"
-          git clone https://github.com/godotengine/godot.git
-          cd godot
-          git checkout $COMMIT_SHA
-          echo "Checked out commit $COMMIT_SHA for tag $LATEST_PRE_TAG"
+          echo "Cloned Godot at tag $LATEST_PRE_TAG"
 
       - name: Install Swappy libraries
         run: |
           cd godot
-
-          # 如果 swappy 静态库已存在则跳过
           if [ -f thirdparty/swappy-frame-pacing/arm64-v8a/libswappy_static.a ] && [ -f thirdparty/swappy-frame-pacing/armeabi-v7a/libswappy_static.a ]; then
             echo "Swappy libs already present — skipping download/extract."
           else
